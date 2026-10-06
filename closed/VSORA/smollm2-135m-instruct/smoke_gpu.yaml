@@ -1,0 +1,22 @@
+# Plumbing test: synthetic prompts, short outputs, seconds per run. Not an MLPerf benchmark.
+benchmark_name: smoke-tiny
+scenario: offline
+test_mode: performance
+
+backend: vllm_server                       # `vllm serve` + OpenAI client; backend=vllm = in-process engine, same keys
+backend_config:                          # extra keys go to the vLLM engine as-is (--kebab-case flags for vllm serve)
+  model: HuggingFaceTB/SmolLM2-135M-Instruct
+  dtype: bfloat16
+  gpu_memory_utilization: 0.9
+
+sampling_config:
+  max_new_tokens: 16
+
+dataset_config:                            # no script: built-in synthetic Dataset
+  args:
+    total_sample_count: 32
+    words_per_prompt: 24
+    seed: 1234
+
+harness_config:
+  user_conf_path: user_gpu.conf

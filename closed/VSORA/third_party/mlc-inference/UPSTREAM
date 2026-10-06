@@ -1,0 +1,9 @@
+Unmodified files from the MLCommons Inference reference repository. Do not edit: MLPerf accuracy must be
+scored with the reference scripts. To update, copy the files again from the new commit and change it below.
+
+repo:   https://github.com/mlcommons/inference
+commit: 3fbc329939999c13d0a7b5e67fb2092287e06047 (2026-09-02)
+
+files (same relative paths as upstream):
+  language/llama3.1-8b/evaluation.py
+  language/llama3.1-8b/dataset.py

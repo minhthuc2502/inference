@@ -1,0 +1,33 @@
+# SmolLM2-135M-Instruct on CNN/DailyMail (llama3.1-8b data + official ROUGE scorer), CPU dev system.
+# Not submittable (the benchmark requires Llama-3.1-8B-Instruct). benchmark_name is outside mlperf.conf so the
+# llama3_1-8b rules (13368 queries, TTFT/TPOT limits) don't apply until first-token reporting exists.
+benchmark_name: cnndm-smollm
+scenario: offline
+test_mode: performance
+
+backend: hf
+backend_config:
+  model: HuggingFaceTB/SmolLM2-135M-Instruct
+  device: cpu
+  dtype: float32
+  batch_size: 8
+
+sampling_config:
+  max_new_tokens: 128
+
+dataset_config:
+  script: ../third_party/mlc-inference/language/llama3.1-8b/dataset.py   # reference Dataset class, relative to this file
+  args:                                    # Dataset(**args)
+    # Preprocessed file with a tok_input column, tokenized for this model:
+    #   scripts/retokenize_dataset.py --src data/cnn_eval.json --dst data/cnn_eval_smollm2.json \
+    #     --model HuggingFaceTB/SmolLM2-135M-Instruct --chat-template
+    dataset_path: data/cnn_eval_smollm2.json
+    total_sample_count: 64                 # first N rows; omit for the whole file
+
+harness_config:
+  user_conf_path: user_cpu.conf            # relative to this file
+
+accuracy_config:
+  script: ../third_party/mlc-inference/language/llama3.1-8b/evaluation.py   # official scorer (ROUGE), relative to this file
+  args: [--mlperf-accuracy-file, "{log}", --dataset-file, "{dataset}", --model-name, "{model}",
+         --dtype, int32]                       # int32: our SUT's response dtype

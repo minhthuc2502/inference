@@ -1,0 +1,6 @@
+{
+  "system_name": "local-dev",
+  "status": "development",
+  "accelerator_model_name": "none (CPU) or NVIDIA GPU via --device cuda",
+  "note": "Replace with a VSORA system description (see closed/NVIDIA/systems in inference_results_v6.1) once the chip backend exists."
+}
