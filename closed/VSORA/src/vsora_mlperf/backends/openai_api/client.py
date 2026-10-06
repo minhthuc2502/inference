@@ -5,6 +5,10 @@ reference gpt-oss / deepseek-r1: SGLang over HTTP). The server owns queuing and 
 only keeps up to `max_concurrency` requests in flight. Prompts go as token ids (`/v1/completions` accepts them);
 output token ids come back via `return_token_ids` (vLLM >= 0.10.2), else the text is re-tokenized like NVIDIA's
 client does, which is not always token-exact.
+
+`api: chat` posts to /v1/chat/completions: a prompt given as plain text becomes one user message and the server applies
+the chat template and tokenizes. `api: completions` (default) accepts token ids or plain text. `sampling` replaces the
+default greedy parameters (e.g. {} = server defaults, {min_tokens: 1}).
 """
 import asyncio
 import json
@@ -25,8 +29,14 @@ class OpenAIBackend(Backend):
         tokenizer: str | None = None,
         max_concurrency: int = 1024,
         timeout_s: float = 3600,
+        api: str = "completions",
+        sampling: dict | None = None,
         **_,
     ):
+        if api not in ("completions", "chat"):
+            raise ValueError("api must be 'completions' or 'chat'")
+        self.api = api
+        self.sampling = sampling
         self.model_name = model
         self.base_url = base_url.rstrip("/")
         self.tokenizer_name = tokenizer or model
@@ -55,25 +65,35 @@ class OpenAIBackend(Backend):
     def encode(self, text: str) -> list[int]:
         return self.tokenizer(text)["input_ids"]
 
-    def _payload(self, input_ids, max_new_tokens, stream):
-        # Greedy, as the reference: temperature 0, top_k 1, min_tokens 1 (first token is never EOS).
-        return {
-            "model": self.model_name,
-            "prompt": input_ids,
-            "max_tokens": max_new_tokens,
-            "temperature": 0.0,
-            "top_p": 1.0,
-            "top_k": 1,
-            "min_tokens": 1,
-            "seed": 42,
-            "stream": stream,
-            "return_token_ids": True,
-        }
+    def _payload(self, prompt, max_new_tokens, stream):
+        # Default greedy, as the reference: temperature 0, top_k 1, min_tokens 1 (first token is never EOS).
+        sampling = self.sampling
+        if sampling is None:
+            sampling = {"temperature": 0.0, "top_p": 1.0, "top_k": 1, "min_tokens": 1, "seed": 42}
+        payload = {"model": self.model_name, "stream": stream, "return_token_ids": True, **sampling}
+        if self.api == "chat":
+            if not isinstance(prompt, str):
+                raise ValueError("api=chat needs plain-text prompts (dataset_config.args.tokenize: false)")
+            payload["messages"] = [{"role": "user", "content": prompt}]
+            payload["max_completion_tokens"] = max_new_tokens
+        else:
+            payload["prompt"] = prompt
+            payload["max_tokens"] = max_new_tokens
+        return payload
+
+    @property
+    def _route(self):
+        return "/v1/chat/completions" if self.api == "chat" else "/v1/completions"
+
+    def _text(self, choice, stream):
+        if self.api == "completions":
+            return choice.get("text") or ""
+        return (choice.get("delta" if stream else "message") or {}).get("content") or ""
 
     def _tokens(self, choice):
         ids = choice.get("token_ids")
         if ids is None:
-            ids = self.tokenizer(choice.get("text", ""), add_special_tokens=False)["input_ids"]
+            ids = self.tokenizer(self._text(choice, False), add_special_tokens=False)["input_ids"]
         return list(ids)
 
     def _strip_eos(self, tokens):
@@ -84,7 +104,7 @@ class OpenAIBackend(Backend):
     def generate(self, batch_input_ids, max_new_tokens):
         async def one(ids):
             async with self._slots:
-                r = await self._client.post("/v1/completions", json=self._payload(ids, max_new_tokens, stream=False))
+                r = await self._client.post(self._route, json=self._payload(ids, max_new_tokens, stream=False))
                 r.raise_for_status()
                 return self._strip_eos(self._tokens(r.json()["choices"][0]))
 
@@ -101,7 +121,7 @@ class OpenAIBackend(Backend):
             async with self._slots:
                 tokens, text = [], ""
                 payload = self._payload(input_ids, max_new_tokens, stream=True)
-                async with self._client.stream("POST", "/v1/completions", json=payload) as r:
+                async with self._client.stream("POST", self._route, json=payload) as r:
                     r.raise_for_status()
                     async for line in r.aiter_lines():
                         if not line.startswith("data:") or line == "data: [DONE]":
@@ -111,7 +131,7 @@ class OpenAIBackend(Backend):
                             continue
                         new = choices[0].get("token_ids")
                         if new is None:  # server without return_token_ids: re-tokenize at the end
-                            text += choices[0].get("text", "")
+                            text += self._text(choices[0], True)
                             new = self.tokenizer(text, add_special_tokens=False)["input_ids"][len(tokens):]
                         if on_first_token and not tokens and new:
                             on_first_token(new[0])
